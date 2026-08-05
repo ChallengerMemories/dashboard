@@ -17,8 +17,15 @@ import {
   Video,
   X,
   Film,
-  Upload,
-  Plus
+  Plus,
+  MessageSquare,
+  Clock,
+  Ban,
+  Check,
+  Edit2,
+  Mail,
+  User,
+  Filter
 } from "lucide-react";
 
 import { 
@@ -35,8 +42,14 @@ interface MediaItem {
   _id: string;
 }
 
-const CLOUDINARY_CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME!;
-const CLOUDINARY_UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET!;
+interface CommentItem {
+  _id: string;
+  name: string;
+  email?: string;
+  text: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+}
 
 async function uploadToCloudinary(file: File): Promise<{ url: string; type: "image" | "video" }> {
   const formData = new FormData();
@@ -44,7 +57,7 @@ async function uploadToCloudinary(file: File): Promise<{ url: string; type: "ima
 
   const res = await fetch('/api/upload', { method: 'POST', body: formData });
   if (!res.ok) throw new Error('Upload failed');
-  return res.json(); // { url, type }
+  return res.json();
 }
 
 export default function EditStoryPage() {
@@ -67,6 +80,12 @@ export default function EditStoryPage() {
   });
 
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const [comments, setComments] = useState<CommentItem[]>([]);
+  const [commentFilter, setCommentFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentData, setEditingCommentData] = useState<{ name: string; text: string }>({ name: "", text: "" });
+  const [commentActionLoading, setCommentActionLoading] = useState<string | null>(null);
+
   const [editingMediaId, setEditingMediaId] = useState<string | null>(null);
   const [editingMediaUrl, setEditingMediaUrl] = useState("");
   const [previewMedia, setPreviewMedia] = useState<MediaItem | null>(null);
@@ -87,6 +106,7 @@ export default function EditStoryPage() {
         isVerified: !!currentStory.isVerified,
       });
       setMedia((currentStory as any).media || []);
+      setComments((currentStory as any).comments || []);
     }
   }, [currentStory]);
 
@@ -98,24 +118,23 @@ export default function EditStoryPage() {
     setFormData((prev) => ({ ...prev, [name]: val }));
   };
 
-const handleSave = async (e: React.FormEvent) => {
-  e.preventDefault();
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
 
-  // Strip local-* _ids so Mongoose generates real ones
-  const cleanMedia = media.map(({ _id, ...rest }) =>
-    _id.startsWith("local-") ? rest : { _id, ...rest }
-  );
+    const cleanMedia = media.map(({ _id, ...rest }) =>
+      _id.startsWith("local-") ? rest : { _id, ...rest }
+    );
 
-  const result = await dispatch(
-    updateStory({ id: id as string, storyData: { ...formData, media: cleanMedia } })
-  );
-  if (updateStory.fulfilled.match(result)) {
-    setTimeout(() => {
-      dispatch(clearStoryStatus());
-      router.push(`/stories/${id}`);
-    }, 1500);
-  }
-};
+    const result = await dispatch(
+      updateStory({ id: id as string, storyData: { ...formData, media: cleanMedia } })
+    );
+    if (updateStory.fulfilled.match(result)) {
+      setTimeout(() => {
+        dispatch(clearStoryStatus());
+        router.push(`/stories/${id}`);
+      }, 1500);
+    }
+  };
 
   const handleDelete = async () => {
     if (window.confirm("Are you sure you want to delete this story? This action cannot be undone.")) {
@@ -126,12 +145,86 @@ const handleSave = async (e: React.FormEvent) => {
     }
   };
 
-  // ── Media upload ──────────────────────────────────────────────
+  // ── Comment Management Actions ──────────────────────────────────
+  const handleUpdateCommentStatus = async (commentId: string, newStatus: "pending" | "approved" | "rejected") => {
+    try {
+      setCommentActionLoading(commentId);
+      const res = await fetch(`/api/stories/${id}/comments/${commentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      });
+
+      if (!res.ok) throw new Error("Failed to update status");
+
+      setComments((prev) =>
+        prev.map((c) => (c._id === commentId ? { ...c, status: newStatus } : c))
+      );
+    } catch (err) {
+      alert("Error updating comment status.");
+    } finally {
+      setCommentActionLoading(null);
+    }
+  };
+
+  const handleStartEditComment = (comment: CommentItem) => {
+    setEditingCommentId(comment._id);
+    setEditingCommentData({ name: comment.name, text: comment.text });
+  };
+
+  const handleSaveCommentEdit = async (commentId: string) => {
+    try {
+      setCommentActionLoading(commentId);
+      const res = await fetch(`/api/stories/${id}/comments/${commentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editingCommentData),
+      });
+
+      if (!res.ok) throw new Error("Failed to save comment edit");
+
+      setComments((prev) =>
+        prev.map((c) =>
+          c._id === commentId ? { ...c, name: editingCommentData.name, text: editingCommentData.text } : c
+        )
+      );
+      setEditingCommentId(null);
+    } catch (err) {
+      alert("Error saving comment edit.");
+    } finally {
+      setCommentActionLoading(null);
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!window.confirm("Delete this comment permanently?")) return;
+
+    try {
+      setCommentActionLoading(commentId);
+      const res = await fetch(`/api/stories/${id}/comments/${commentId}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) throw new Error("Failed to delete comment");
+
+      setComments((prev) => prev.filter((c) => c._id !== commentId));
+    } catch (err) {
+      alert("Error deleting comment.");
+    } finally {
+      setCommentActionLoading(null);
+    }
+  };
+
+  const filteredComments = comments.filter((c) => {
+    if (commentFilter === "all") return true;
+    return c.status === commentFilter;
+  });
+
+  // ── Media Upload ──────────────────────────────────────────────
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
 
-    // Reset input so the same file can be re-selected if needed
     e.target.value = "";
 
     const trackers = files.map((f) => ({ name: f.name, progress: "uploading" as const }));
@@ -156,11 +249,10 @@ const handleSave = async (e: React.FormEvent) => {
     setUploadingFiles(updated);
     setMedia((prev) => [...prev, ...newItems]);
 
-    // Clear trackers after a moment
     setTimeout(() => setUploadingFiles([]), 2500);
   };
 
-  // ── Media editing ─────────────────────────────────────────────
+  // ── Media Editing ─────────────────────────────────────────────
   const startEditMedia = (item: MediaItem) => {
     setEditingMediaId(item._id);
     setEditingMediaUrl(item.url);
@@ -311,7 +403,6 @@ const handleSave = async (e: React.FormEvent) => {
               </div>
 
               <div className="p-6 md:p-8 space-y-5">
-
                 {/* Upload drop zone */}
                 <div
                   onClick={() => fileInputRef.current?.click()}
@@ -383,10 +474,8 @@ const handleSave = async (e: React.FormEvent) => {
                         key={item._id}
                         className="group relative rounded-2xl border border-slate-200 overflow-hidden bg-slate-50"
                       >
-                        {/* Thumbnail */}
                         <div className="relative aspect-video bg-slate-100">
                           {item.type === "image" ? (
-                            // eslint-disable-next-line @next/next/no-img-element
                             <img
                               src={item.url}
                               alt="media"
@@ -404,7 +493,6 @@ const handleSave = async (e: React.FormEvent) => {
                             />
                           )}
 
-                          {/* Hover overlay */}
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
                             <button
                               type="button"
@@ -424,7 +512,6 @@ const handleSave = async (e: React.FormEvent) => {
                             </button>
                           </div>
 
-                          {/* Badges */}
                           {item.url === formData.imageUrl && (
                             <span className="absolute top-2 left-2 text-[10px] font-bold bg-blue-600 text-white px-2 py-0.5 rounded-full">
                               Cover
@@ -436,7 +523,6 @@ const handleSave = async (e: React.FormEvent) => {
                           </span>
                         </div>
 
-                        {/* URL / actions row */}
                         <div className="p-3 space-y-2">
                           {editingMediaId === item._id ? (
                             <div className="flex gap-2">
@@ -496,6 +582,221 @@ const handleSave = async (e: React.FormEvent) => {
                 )}
               </div>
             </section>
+
+            {/* ── COMMENTS MODERATION SECTION ── */}
+            <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <MessageSquare size={18} className="text-blue-500" />
+                  <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wider">
+                    Comments Moderation
+                  </h2>
+                  <span className="ml-2 px-2 py-0.5 text-xs font-bold bg-blue-100 text-blue-700 rounded-full">
+                    {comments.length}
+                  </span>
+                </div>
+
+                {/* Status filter tabs */}
+                <div className="flex items-center gap-1 bg-slate-200/60 p-1 rounded-xl">
+                  {(["all", "pending", "approved", "rejected"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setCommentFilter(tab)}
+                      className={`px-3 py-1 text-xs font-bold rounded-lg capitalize transition-all ${
+                        commentFilter === tab
+                          ? "bg-white text-slate-900 shadow-sm"
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {tab}
+                      {tab !== "all" && (
+                        <span className="ml-1 opacity-60">
+                          ({comments.filter((c) => c.status === tab).length})
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-6 md:p-8 space-y-4">
+                {filteredComments.length === 0 ? (
+                  <div className="text-center py-8 text-slate-400">
+                    <MessageSquare size={32} className="mx-auto mb-2 opacity-30" />
+                    <p className="text-sm font-medium">No comments found for this filter.</p>
+                  </div>
+                ) : (
+                  filteredComments.map((comment) => (
+                    <div
+                      key={comment._id}
+                      className={`p-5 rounded-2xl border transition-all ${
+                        comment.status === "pending"
+                          ? "bg-amber-50/40 border-amber-200"
+                          : comment.status === "approved"
+                          ? "bg-emerald-50/30 border-emerald-200"
+                          : "bg-rose-50/30 border-rose-200 opacity-75"
+                      }`}
+                    >
+                      {editingCommentId === comment._id ? (
+                        /* Inline Edit Comment Form */
+                        <div className="space-y-4">
+                          <div>
+                            <label className="text-[11px] font-bold text-slate-500 uppercase">
+                              Author Name
+                            </label>
+                            <input
+                              type="text"
+                              value={editingCommentData.name}
+                              onChange={(e) =>
+                                setEditingCommentData({ ...editingCommentData, name: e.target.value })
+                              }
+                              className="w-full mt-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[11px] font-bold text-slate-500 uppercase">
+                              Comment Text
+                            </label>
+                            <textarea
+                              rows={3}
+                              value={editingCommentData.text}
+                              onChange={(e) =>
+                                setEditingCommentData({ ...editingCommentData, text: e.target.value })
+                              }
+                              className="w-full mt-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+                            />
+                          </div>
+                          <div className="flex gap-2 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setEditingCommentId(null)}
+                              className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-lg"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveCommentEdit(comment._id)}
+                              disabled={commentActionLoading === comment._id}
+                              className="px-4 py-1.5 text-xs font-bold bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-1"
+                            >
+                              {commentActionLoading === comment._id && (
+                                <Loader2 size={12} className="animate-spin" />
+                              )}
+                              Save Changes
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Normal Comment Card View */
+                        <div className="space-y-3">
+                          {/* Top Row: Info & Status Badge */}
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                                  <User size={14} className="text-slate-400" />
+                                  {comment.name}
+                                </span>
+                                {comment.email && (
+                                  <span className="text-xs text-slate-400 flex items-center gap-1">
+                                    <Mail size={12} />
+                                    {comment.email}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                Submitted on {new Date(comment.createdAt).toLocaleString()}
+                              </p>
+                            </div>
+
+                            {/* Status Badge */}
+                            <span
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold capitalize ${
+                                comment.status === "pending"
+                                  ? "bg-amber-100 text-amber-800 border border-amber-300"
+                                  : comment.status === "approved"
+                                  ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                                  : "bg-rose-100 text-rose-800 border border-rose-300"
+                              }`}
+                            >
+                              {comment.status === "pending" && <Clock size={12} />}
+                              {comment.status === "approved" && <CheckCircle2 size={12} />}
+                              {comment.status === "rejected" && <Ban size={12} />}
+                              {comment.status}
+                            </span>
+                          </div>
+
+                          {/* Comment Body */}
+                          <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line bg-white/60 p-3 rounded-xl border border-slate-100">
+                            {comment.text}
+                          </p>
+
+                          {/* Moderation Actions Toolbar */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/60">
+                            <div className="flex items-center gap-1.5">
+                              {comment.status !== "approved" && (
+                                <button
+                                  type="button"
+                                  disabled={commentActionLoading === comment._id}
+                                  onClick={() => handleUpdateCommentStatus(comment._id, "approved")}
+                                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-100 hover:bg-emerald-200 rounded-lg transition-colors"
+                                >
+                                  <Check size={14} /> Publish / Approve
+                                </button>
+                              )}
+
+                              {comment.status !== "rejected" && (
+                                <button
+                                  type="button"
+                                  disabled={commentActionLoading === comment._id}
+                                  onClick={() => handleUpdateCommentStatus(comment._id, "rejected")}
+                                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-100 hover:bg-rose-200 rounded-lg transition-colors"
+                                >
+                                  <Ban size={14} /> Reject
+                                </button>
+                              )}
+
+                              {comment.status !== "pending" && (
+                                <button
+                                  type="button"
+                                  disabled={commentActionLoading === comment._id}
+                                  onClick={() => handleUpdateCommentStatus(comment._id, "pending")}
+                                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-lg transition-colors"
+                                >
+                                  <Clock size={14} /> Set Pending
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditComment(comment)}
+                                className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Edit Comment"
+                              >
+                                <Edit2 size={15} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteComment(comment._id)}
+                                className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Delete Comment"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
           </div>
 
           {/* ── Right Sidebar ── */}
@@ -629,7 +930,6 @@ const handleSave = async (e: React.FormEvent) => {
               <X size={18} />
             </button>
             {previewMedia.type === "image" ? (
-              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={previewMedia.url}
                 alt="preview"

@@ -6,13 +6,30 @@ const storySchema = new Schema({
   title:     { type: String, required: true },
   narrative: { type: String, required: true },
   mission:   { type: String, enum: ["challenger", "columbia"], required: true },
+  country:   { type: String },
+  state:     { type: String },
   imageUrl:  { type: String },
 
-  // ✅ was missing — Mongoose strict mode strips unknown fields on read
+  // Media attachments
   media: [
     {
       url:  { type: String, required: true },
       type: { type: String, enum: ["image", "video"], required: true },
+    },
+  ],
+
+  // ✅ Added comments subdocument array
+  comments: [
+    {
+      name: { type: String, required: true },
+      email: { type: String },
+      text: { type: String, required: true },
+      status: {
+        type: String,
+        enum: ["pending", "approved", "rejected"],
+        default: "pending",
+      },
+      createdAt: { type: Date, default: Date.now },
     },
   ],
 
@@ -32,9 +49,8 @@ const storySchema = new Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-// ✅ was 'stories' — must match the main website's model name 'Story'
-// so both apps talk to the same cached model and same collection
+// Bust model cache so schema updates apply immediately
 delete (mongoose.models as any).Story;
-const Story = mongoose.model('Story', storySchema);
+const Story = mongoose.models.Story || mongoose.model('Story', storySchema);
 
 export default Story;
