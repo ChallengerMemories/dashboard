@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET!;
 
 async function connectDB() {
   if (mongoose.connection.readyState === 0) {
-    await mongoose.connect(MONGO_URI);
+    await mongoose.connect(MONGO_URI, { dbName: 'space' });
   }
 }
 
